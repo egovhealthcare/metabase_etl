@@ -1,0 +1,98 @@
+-- Run on the warehouse database after sql/01-warehouse-fdw-setup.sql.
+-- These table names were derived from care/emr/models and care/facility/models.
+-- If this file fails because one table is absent in a deployment, remove that
+-- table from the LIMIT TO list and rerun.
+
+DROP SCHEMA IF EXISTS replica CASCADE;
+CREATE SCHEMA replica;
+
+IMPORT FOREIGN SCHEMA public
+LIMIT TO (
+  facility_facility,
+  facility_facilityflag,
+  facility_patientmobileotp,
+  emr_account,
+  emr_activitydefinition,
+  emr_allergyintolerance,
+  emr_chargeitem,
+  emr_chargeitemdefinition,
+  emr_condition,
+  emr_consent,
+  emr_device,
+  emr_deviceencounterhistory,
+  emr_devicelocationhistory,
+  emr_deviceservicehistory,
+  emr_diagnosticreport,
+  emr_encounter,
+  emr_encounterorganization,
+  emr_facilitymonetoryconfig,
+  emr_userresourcefavorites,
+  emr_fileupload,
+  emr_healthcareservice,
+  emr_inventoryitem,
+  emr_invoice,
+  emr_facilitylocation,
+  emr_facilitylocationorganization,
+  emr_facilitylocationencounter,
+  emr_medicationadministration,
+  emr_medicationdispense,
+  emr_dispenseorder,
+  emr_medicationrequestprescription,
+  emr_medicationrequest,
+  emr_medicationstatement,
+  emr_metaartifact,
+  emr_notethread,
+  emr_notemessage,
+  emr_observation,
+  emr_observationdefinition,
+  emr_facilityorganization,
+  emr_organization,
+  emr_organizationuser,
+  emr_facilityorganizationuser,
+  emr_patient,
+  emr_patientorganization,
+  emr_patientuser,
+  emr_patientidentifierconfig,
+  emr_patientidentifier,
+  emr_paymentreconciliation,
+  emr_product,
+  emr_productknowledge,
+  emr_questionnairetag,
+  emr_questionnaire,
+  emr_formsubmission,
+  emr_questionnaireresponse,
+  emr_questionnaireorganization,
+  emr_questionnairefacilityorganization,
+  emr_questionnaireresponsetemplate,
+  emr_reportupload,
+  emr_template,
+  emr_resourcecategory,
+  emr_resourcerequest,
+  emr_resourcerequestcomment,
+  emr_tokenslot,
+  emr_tokenbooking,
+  emr_schedulableresource,
+  emr_schedule,
+  emr_availability,
+  emr_availabilityexception,
+  emr_tokenqueue,
+  emr_tokensubqueue,
+  emr_tokencategory,
+  emr_token,
+  emr_servicerequest,
+  emr_specimen,
+  emr_specimendefinition,
+  emr_supplydelivery,
+  emr_deliveryorder,
+  emr_supplyrequest,
+  emr_requestorder,
+  emr_tagconfig,
+  emr_valueset,
+  emr_uservaluesetpreference
+)
+FROM SERVER care_read_replica
+INTO replica;
+
+GRANT USAGE ON SCHEMA replica TO warehouse_etl;
+GRANT SELECT ON ALL TABLES IN SCHEMA replica TO warehouse_etl;
+
