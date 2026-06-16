@@ -45,13 +45,11 @@ docs/operations.md                   Runbook and troubleshooting
 
 Enable `pg_cron` on the warehouse Cloud SQL instance before creating schedules:
 
-```bash
-gcloud sql instances patch WAREHOUSE_INSTANCE \
-  --database-flags=cloudsql.enable_pg_cron=on
-```
+Navigate to the GCP Cloud SQL Console, Edit your CloudSQL Instance and Add a new flag
 
-The command above replaces the full flag set. If your instance already has
-flags, include them all in the same command, or use the Cloud SQL Console.
+`cloudsql.enable_pg_cron=on`
+
+---
 
 `postgres_fdw` is installed with SQL and does not require the `pg_cron` flag:
 
@@ -111,4 +109,3 @@ watermark safely. Keep the lookback window larger than expected replica lag.
 
 For analytics, prefer keeping soft-deleted rows in `raw.*` and filtering
 `deleted = false` in `mart.*` views. This preserves delete events and auditability.
-

@@ -42,10 +42,14 @@ STABLE
 AS $$
   SELECT EXISTS (
     SELECT 1
-    FROM information_schema.columns
-    WHERE table_schema = p_schema
-      AND table_name = p_table_name
-      AND column_name = p_column_name
+    FROM pg_catalog.pg_attribute a
+    JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = p_schema
+      AND c.relname = p_table_name
+      AND a.attname = p_column_name
+      AND a.attnum > 0
+      AND NOT a.attisdropped
   );
 $$;
 
@@ -192,22 +196,30 @@ BEGIN
 
   v_lower_bound := COALESCE(v_watermark, '1970-01-01'::timestamptz) - p_lookback;
 
-  SELECT string_agg(quote_ident(column_name), ', ' ORDER BY ordinal_position)
+  SELECT string_agg(quote_ident(a.attname), ', ' ORDER BY a.attnum)
   INTO v_columns
-  FROM information_schema.columns
-  WHERE table_schema = 'raw'
-    AND table_name = p_table_name;
+  FROM pg_catalog.pg_attribute a
+  JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'raw'
+    AND c.relname = p_table_name
+    AND a.attnum > 0
+    AND NOT a.attisdropped;
 
   SELECT string_agg(
-    format('%1$I = EXCLUDED.%1$I', column_name),
+    format('%1$I = EXCLUDED.%1$I', a.attname),
     ', '
-    ORDER BY ordinal_position
+    ORDER BY a.attnum
   )
   INTO v_update_list
-  FROM information_schema.columns
-  WHERE table_schema = 'raw'
-    AND table_name = p_table_name
-    AND column_name <> 'id';
+  FROM pg_catalog.pg_attribute a
+  JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'raw'
+    AND c.relname = p_table_name
+    AND a.attname <> 'id'
+    AND a.attnum > 0
+    AND NOT a.attisdropped;
 
   IF v_columns IS NULL THEN
     RAISE EXCEPTION 'No columns found for raw.%', p_table_name;
@@ -369,4 +381,5 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA etl TO warehouse_et
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA etl TO warehouse_etl;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA etl TO warehouse_etl;
 GRANT USAGE, CREATE ON SCHEMA raw TO warehouse_etl;
-
+GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA raw TO warehouse_etl;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA raw TO warehouse_etl;

@@ -35,6 +35,8 @@ OPTIONS (
 
 GRANT USAGE ON FOREIGN SERVER care_read_replica TO warehouse_etl;
 
+DROP USER MAPPING IF EXISTS FOR warehouse_etl SERVER care_read_replica;
+
 CREATE USER MAPPING FOR warehouse_etl
 SERVER care_read_replica
 OPTIONS (
@@ -43,10 +45,11 @@ OPTIONS (
 );
 
 -- Optional, useful while testing as the current admin user.
-CREATE USER MAPPING IF NOT EXISTS FOR CURRENT_USER
+DROP USER MAPPING IF EXISTS FOR CURRENT_USER SERVER care_read_replica;
+
+CREATE USER MAPPING FOR CURRENT_USER
 SERVER care_read_replica
 OPTIONS (
   user 'warehouse_fdw_reader',
   password 'CHANGE_ME_SOURCE_READER_PASSWORD'
 );
-

@@ -38,6 +38,12 @@ FROM cron.job_run_details
 ORDER BY start_time DESC
 LIMIT 50;
 
--- Unschedule examples.
--- SELECT cron.unschedule('care-fdw-hourly-refresh');
--- SELECT cron.unschedule('care-fdw-daily-refresh');
+-- Unschedule examples. Prefer jobid on managed Postgres because pg_cron uses
+-- row-level policies around job ownership.
+-- SELECT cron.unschedule(jobid)
+-- FROM cron.job
+-- WHERE jobname = 'care-fdw-hourly-refresh';
+--
+-- SELECT cron.unschedule(jobid)
+-- FROM cron.job
+-- WHERE jobname = 'care-fdw-daily-refresh';
