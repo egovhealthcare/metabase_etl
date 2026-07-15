@@ -11,7 +11,7 @@ CREATE SCHEMA IF NOT EXISTS etl;
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'warehouse_etl') THEN
-    CREATE ROLE warehouse_etl LOGIN PASSWORD :'WAREHOUSE_ETL_PASSWORD';
+    CREATE ROLE warehouse_etl LOGIN;
   END IF;
 END;
 $$;

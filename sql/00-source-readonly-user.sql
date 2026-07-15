@@ -6,7 +6,7 @@ DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'warehouse_fdw_reader') THEN
     CREATE ROLE warehouse_fdw_reader
-      LOGIN PASSWORD :'FDW_READER_PASSWORD'
+      LOGIN
       CONNECTION LIMIT 2;
   END IF;
 END;

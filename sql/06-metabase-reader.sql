@@ -4,7 +4,7 @@
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'metabase_reader') THEN
-    CREATE ROLE metabase_reader LOGIN PASSWORD :'METABASE_READER_PASSWORD';
+    CREATE ROLE metabase_reader LOGIN;
   END IF;
 END;
 $$;
