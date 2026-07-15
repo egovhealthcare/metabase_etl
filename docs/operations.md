@@ -100,10 +100,10 @@ Test as `warehouse_etl`:
 
 ```sql
 SET ROLE warehouse_etl;
-
 SELECT id
 FROM replica.facility_facility
 LIMIT 1;
+
 
 SELECT etl.refresh_table('facility_facility');
 

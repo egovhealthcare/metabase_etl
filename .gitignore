@@ -1,0 +1,20 @@
+# Credential and secret files
+*.env
+.env*
+secrets.*
+vars.sql
+*.pem
+*.key
+*.p12
+*.pfx
+
+# psql variable files (local run configs)
+*.vars
+psql_vars*
+
+# Editors and OS
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
