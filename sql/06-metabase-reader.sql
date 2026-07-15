@@ -17,21 +17,21 @@ GRANT USAGE ON SCHEMA raw TO metabase_reader;
 GRANT USAGE ON SCHEMA mart TO metabase_reader;
 GRANT USAGE ON SCHEMA etl TO metabase_reader;
 
--- raw.* tables may be owned by different roles depending on who created them
--- (warehouse_etl via pg_cron, or admin via manual ETL calls). Loop per owner
--- so each GRANT runs as the table's owner, avoiding permission denied errors.
+-- Grant per-table, switching to each table's owner to avoid permission errors.
+-- raw.* may be owned by different roles (warehouse_etl via pg_cron, admin via
+-- manual ETL calls). Each table can only be granted by its own owner.
 DO $$
 DECLARE
   r record;
 BEGIN
   FOR r IN
-    SELECT DISTINCT tableowner
+    SELECT tablename, tableowner
     FROM pg_tables
     WHERE schemaname = 'raw'
   LOOP
     EXECUTE format('SET ROLE %I', r.tableowner);
-    EXECUTE 'GRANT SELECT ON ALL TABLES IN SCHEMA raw TO metabase_reader';
-    RESET ROLE;
+    EXECUTE format('GRANT SELECT ON TABLE raw.%I TO metabase_reader', r.tablename);
+    EXECUTE 'RESET ROLE';
   END LOOP;
 END;
 $$;
