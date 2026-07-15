@@ -1,15 +1,18 @@
 -- Run on the warehouse database.
--- Replace password before execution.
+-- Credentials are injected via psql -v variables.
 
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'metabase_reader') THEN
-    CREATE ROLE metabase_reader LOGIN PASSWORD 'CHANGE_ME_METABASE_PASSWORD';
+    CREATE ROLE metabase_reader LOGIN PASSWORD :'METABASE_READER_PASSWORD';
   END IF;
 END;
 $$;
 
-GRANT CONNECT ON DATABASE warehouse TO metabase_reader;
+-- Sync password on reruns when role already exists
+ALTER ROLE metabase_reader PASSWORD :'METABASE_READER_PASSWORD';
+
+GRANT CONNECT ON DATABASE metabase_warehouse TO metabase_reader;
 GRANT USAGE ON SCHEMA raw TO metabase_reader;
 GRANT USAGE ON SCHEMA mart TO metabase_reader;
 GRANT USAGE ON SCHEMA etl TO metabase_reader;
