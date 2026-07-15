@@ -381,5 +381,5 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA etl TO warehouse_et
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA etl TO warehouse_etl;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA etl TO warehouse_etl;
 GRANT USAGE, CREATE ON SCHEMA raw TO warehouse_etl;
-GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA raw TO warehouse_etl;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA raw TO warehouse_etl;
+-- No table-level grants needed here: warehouse_etl creates and owns raw.*
+-- tables at ETL runtime, so it already has full access on its own objects.

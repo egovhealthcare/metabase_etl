@@ -38,6 +38,11 @@ OPTIONS (
 
 GRANT USAGE ON FOREIGN SERVER care_read_replica TO warehouse_etl;
 
+-- Allow the provision admin to act as warehouse_etl for grant operations.
+-- warehouse_etl owns raw.* tables (created by pg_cron ETL jobs), so any
+-- GRANT on those tables must be executed under that role.
+GRANT warehouse_etl TO CURRENT_USER;
+
 DROP USER MAPPING IF EXISTS FOR warehouse_etl SERVER care_read_replica;
 
 CREATE USER MAPPING FOR warehouse_etl

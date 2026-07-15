@@ -17,12 +17,16 @@ GRANT USAGE ON SCHEMA raw TO metabase_reader;
 GRANT USAGE ON SCHEMA mart TO metabase_reader;
 GRANT USAGE ON SCHEMA etl TO metabase_reader;
 
+-- raw.* tables are owned by warehouse_etl (created at ETL runtime).
+-- Switch to that role to grant SELECT to metabase_reader idempotently.
+SET ROLE warehouse_etl;
 GRANT SELECT ON ALL TABLES IN SCHEMA raw TO metabase_reader;
-GRANT SELECT ON ALL TABLES IN SCHEMA mart TO metabase_reader;
-GRANT SELECT ON etl.replication_status TO metabase_reader;
-
 ALTER DEFAULT PRIVILEGES IN SCHEMA raw
 GRANT SELECT ON TABLES TO metabase_reader;
+RESET ROLE;
+
+GRANT SELECT ON ALL TABLES IN SCHEMA mart TO metabase_reader;
+GRANT SELECT ON etl.replication_status TO metabase_reader;
 
 ALTER DEFAULT PRIVILEGES IN SCHEMA mart
 GRANT SELECT ON TABLES TO metabase_reader;
