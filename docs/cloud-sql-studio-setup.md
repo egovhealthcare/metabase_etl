@@ -61,11 +61,11 @@ ALTER ROLE warehouse_fdw_reader SET idle_in_transaction_session_timeout = '1min'
 ## Step 2: Set Up the FDW on the Warehouse
 
 > **Target**: Warehouse instance  
-> **Database**: `warehouse` (or whatever you named it)  
+> **Database**: `metabase_warehouse` (or whatever you named it)  
 > **Run as**: `postgres`
 
 1. Open **Cloud SQL Studio** for your **warehouse** instance
-2. Select database: `warehouse`
+2. Select database: `metabase_warehouse`
 3. Run the following (replace the 3 placeholders):
 
 ```sql
@@ -82,12 +82,14 @@ CREATE SCHEMA IF NOT EXISTS etl;
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'warehouse_etl') THEN
-    CREATE ROLE warehouse_etl LOGIN PASSWORD 'CHANGE_ME_WAREHOUSE_ETL_PASSWORD';  -- ← Replace
+    CREATE ROLE warehouse_etl LOGIN;
   END IF;
 END;
 $$;
 
-GRANT CONNECT ON DATABASE warehouse TO warehouse_etl;
+ALTER ROLE warehouse_etl PASSWORD 'CHANGE_ME_WAREHOUSE_ETL_PASSWORD';  -- ← Replace
+
+GRANT CONNECT ON DATABASE metabase_warehouse TO warehouse_etl;
 GRANT USAGE, CREATE ON SCHEMA replica TO warehouse_etl;
 GRANT USAGE, CREATE ON SCHEMA raw TO warehouse_etl;
 GRANT USAGE, CREATE ON SCHEMA mart TO warehouse_etl;
@@ -101,11 +103,14 @@ FOREIGN DATA WRAPPER postgres_fdw
 OPTIONS (
   host 'READ_REPLICA_PRIVATE_IP',         -- ← Replace with source read replica private IP
   port '5432',
-  dbname 'care',
+  dbname 'care',                          -- ← Replace with your source database name
   fetch_size '10000'
 );
 
 GRANT USAGE ON FOREIGN SERVER care_read_replica TO warehouse_etl;
+
+-- Allow the admin user to act as warehouse_etl for grant operations
+GRANT warehouse_etl TO CURRENT_USER;
 
 -- User mapping for the ETL role
 DROP USER MAPPING IF EXISTS FOR warehouse_etl SERVER care_read_replica;
@@ -253,7 +258,7 @@ SELECT count(*) FROM replica.facility_facility;
 ## Step 4: Create ETL Functions and State Tables
 
 > **Target**: Warehouse instance  
-> **Database**: `warehouse`  
+> **Database**: `metabase_warehouse`  
 > **Run as**: `postgres`
 
 1. Open the file `sql/03-etl-functions.sql` from this repository
@@ -284,7 +289,7 @@ SELECT viewname FROM pg_views WHERE schemaname = 'etl';
 ## Step 5: Register All Tables
 
 > **Target**: Warehouse instance  
-> **Database**: `warehouse`  
+> **Database**: `metabase_warehouse`  
 > **Run as**: `postgres`
 
 1. Open the file `sql/04-register-care-tables.sql` from this repository
@@ -295,7 +300,7 @@ SELECT viewname FROM pg_views WHERE schemaname = 'etl';
 
 ```sql
 SELECT count(*) FROM etl.replication_tables;
--- Should return ~77 rows
+-- Should return 81 rows
 
 SELECT refresh_group, refresh_mode, count(*)
 FROM etl.replication_tables
@@ -309,7 +314,7 @@ ORDER BY 1, 2;
 ## Step 6: Run the First Manual Refresh (Test)
 
 > **Target**: Warehouse instance  
-> **Database**: `warehouse`  
+> **Database**: `metabase_warehouse`  
 > **Run as**: `postgres`
 
 Before enabling cron, verify the ETL works end-to-end:
@@ -362,11 +367,16 @@ LIMIT 20;
 ```sql
 CREATE EXTENSION IF NOT EXISTS pg_cron;
 
+-- Unschedule first so reruns don't hit unique-name constraint
+SELECT cron.unschedule(jobid) FROM cron.job WHERE jobname = 'care-fdw-hourly-refresh';
+SELECT cron.unschedule(jobid) FROM cron.job WHERE jobname = 'care-fdw-daily-refresh';
+SELECT cron.unschedule(jobid) FROM cron.job WHERE jobname = 'care-fdw-clean-cron-history';
+
 SELECT cron.schedule_in_database(
   'care-fdw-hourly-refresh',
   '7 * * * *',
   $$SELECT etl.refresh_group('hourly');$$,
-  'warehouse',
+  'metabase_warehouse',
   'warehouse_etl'
 );
 
@@ -374,7 +384,7 @@ SELECT cron.schedule_in_database(
   'care-fdw-daily-refresh',
   '0 2 * * *',
   $$SELECT etl.refresh_group('daily');$$,
-  'warehouse',
+  'metabase_warehouse',
   'warehouse_etl'
 );
 
@@ -410,34 +420,55 @@ LIMIT 10;
 ## Step 8: Create the Metabase Reader Role
 
 > **Target**: Warehouse instance  
-> **Database**: `warehouse`  
+> **Database**: `metabase_warehouse`  
 > **Run as**: `postgres`
 
-Switch back to the `warehouse` database, then run:
+Switch back to the `metabase_warehouse` database, then run:
 
 ```sql
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'metabase_reader') THEN
-    CREATE ROLE metabase_reader LOGIN PASSWORD 'CHANGE_ME_METABASE_PASSWORD';  -- ← Replace
+    CREATE ROLE metabase_reader LOGIN;
   END IF;
 END;
 $$;
 
-GRANT CONNECT ON DATABASE warehouse TO metabase_reader;
+ALTER ROLE metabase_reader PASSWORD 'CHANGE_ME_METABASE_PASSWORD';  -- ← Replace
+
+GRANT CONNECT ON DATABASE metabase_warehouse TO metabase_reader;
 GRANT USAGE ON SCHEMA raw TO metabase_reader;
 GRANT USAGE ON SCHEMA mart TO metabase_reader;
 GRANT USAGE ON SCHEMA etl TO metabase_reader;
 
-GRANT SELECT ON ALL TABLES IN SCHEMA raw TO metabase_reader;
+-- Grant per-table, switching to each table's owner to handle mixed ownership
+DO $$
+DECLARE
+  r record;
+BEGIN
+  FOR r IN
+    SELECT tablename, tableowner
+    FROM pg_tables
+    WHERE schemaname = 'raw'
+  LOOP
+    EXECUTE format('SET ROLE %I', r.tableowner);
+    EXECUTE format('GRANT SELECT ON TABLE raw.%I TO metabase_reader', r.tablename);
+    EXECUTE 'RESET ROLE';
+  END LOOP;
+END;
+$$;
+
+-- Future tables get SELECT auto-granted
+ALTER DEFAULT PRIVILEGES FOR ROLE warehouse_etl IN SCHEMA raw
+  GRANT SELECT ON TABLES TO metabase_reader;
+ALTER DEFAULT PRIVILEGES IN SCHEMA raw
+  GRANT SELECT ON TABLES TO metabase_reader;
+
 GRANT SELECT ON ALL TABLES IN SCHEMA mart TO metabase_reader;
 GRANT SELECT ON etl.replication_status TO metabase_reader;
 
-ALTER DEFAULT PRIVILEGES IN SCHEMA raw
-GRANT SELECT ON TABLES TO metabase_reader;
-
 ALTER DEFAULT PRIVILEGES IN SCHEMA mart
-GRANT SELECT ON TABLES TO metabase_reader;
+  GRANT SELECT ON TABLES TO metabase_reader;
 ```
 
 > ⚠️ **Do NOT grant access to `replica.*`** — that would route Metabase queries through FDW directly to the source and overload it.
@@ -453,7 +484,7 @@ In your Metabase instance:
    - **Type**: PostgreSQL
    - **Host**: Warehouse instance private IP (or Cloud SQL Auth Proxy address)
    - **Port**: 5432
-   - **Database**: `warehouse`
+   - **Database**: `metabase_warehouse`
    - **Username**: `metabase_reader`
    - **Password**: (the password you set in Step 8)
 3. Click **Save**
@@ -495,8 +526,8 @@ ORDER BY table_name;
 
 | Step | Cloud SQL Instance | Database to Select |
 |------|--------------------|--------------------|
-| 1 | Source (primary) | `care` |
-| 2–6, 8 | Warehouse | `warehouse` |
+| 1 | Source (primary) | `care` (your source database name) |
+| 2–6, 8 | Warehouse | `metabase_warehouse` |
 | 7 | Warehouse | `postgres` |
 
 ---

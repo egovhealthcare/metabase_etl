@@ -83,7 +83,6 @@ Run on the warehouse database:
 GRANT USAGE ON FOREIGN SERVER care_read_replica TO warehouse_etl;
 GRANT USAGE ON SCHEMA replica, raw, etl TO warehouse_etl;
 GRANT SELECT ON ALL TABLES IN SCHEMA replica TO warehouse_etl;
-GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA raw TO warehouse_etl;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA etl TO warehouse_etl;
 
 DROP USER MAPPING IF EXISTS FOR warehouse_etl SERVER care_read_replica;
@@ -92,9 +91,11 @@ CREATE USER MAPPING FOR warehouse_etl
 SERVER care_read_replica
 OPTIONS (
   user 'warehouse_fdw_reader',
-  password 'CHANGE_ME_SOURCE_READER_PASSWORD'
+  password 'CHANGE_ME_SOURCE_READER_PASSWORD'  -- ← Replace
 );
 ```
+
+> **Note**: Do NOT run `GRANT ... ON ALL TABLES IN SCHEMA raw TO warehouse_etl` — `warehouse_etl` already owns all `raw.*` tables (ownership is assigned on creation in `etl.ensure_raw_table`). Attempting to grant on tables you don't own will fail with "must be owner".
 
 Test as `warehouse_etl`:
 
@@ -155,12 +156,14 @@ DROP SCHEMA IF EXISTS raw CASCADE;
 CREATE SCHEMA raw;
 
 GRANT USAGE, CREATE ON SCHEMA raw TO warehouse_etl;
-GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA raw TO warehouse_etl;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA raw TO warehouse_etl;
 
 TRUNCATE etl.replication_state;
 TRUNCATE etl.replication_runs RESTART IDENTITY;
 ```
+
+> **Note**: Do NOT add grants on `raw` tables — `warehouse_etl` will own them after creation.
+> The `etl.ensure_raw_table` function assigns ownership on `CREATE TABLE`, so warehouse_etl
+> has full control without any extra `GRANT` statements.
 
 Then run the setup functions file again and trigger a staged initial sync:
 
