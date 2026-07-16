@@ -73,6 +73,7 @@ BEGIN
       p_table_name,
       p_table_name
     );
+    EXECUTE format('ALTER TABLE raw.%I OWNER TO warehouse_etl', p_table_name);
   END IF;
 
   SELECT to_regclass(format('raw.%I', p_table_name)) INTO v_raw_table;
@@ -383,3 +384,21 @@ GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA etl TO warehouse_etl;
 GRANT USAGE, CREATE ON SCHEMA raw TO warehouse_etl;
 -- No table-level grants needed here: warehouse_etl creates and owns raw.*
 -- tables at ETL runtime, so it already has full access on its own objects.
+
+-- Reassign ownership of any existing raw.* tables to warehouse_etl.
+-- Handles tables created by admin during manual testing or earlier provision
+-- runs so that warehouse_etl can add indexes and constraints during ETL.
+DO $$
+DECLARE
+  r record;
+BEGIN
+  FOR r IN
+    SELECT tablename
+    FROM pg_tables
+    WHERE schemaname = 'raw'
+      AND tableowner <> 'warehouse_etl'
+  LOOP
+    EXECUTE format('ALTER TABLE raw.%I OWNER TO warehouse_etl', r.tablename);
+  END LOOP;
+END;
+$$;
