@@ -1,14 +1,19 @@
 -- Run from the database where pg_cron is installed, usually postgres.
 -- The commands below execute in the warehouse database as warehouse_etl.
--- Replace warehouse if your warehouse database has a different name.
+-- Idempotent — unschedules existing jobs by name before recreating them.
 
 CREATE EXTENSION IF NOT EXISTS pg_cron;
+
+-- Unschedule first so reruns don't hit unique-name constraint
+SELECT cron.unschedule(jobid) FROM cron.job WHERE jobname = 'care-fdw-hourly-refresh';
+SELECT cron.unschedule(jobid) FROM cron.job WHERE jobname = 'care-fdw-daily-refresh';
+SELECT cron.unschedule(jobid) FROM cron.job WHERE jobname = 'care-fdw-clean-cron-history';
 
 SELECT cron.schedule_in_database(
   'care-fdw-hourly-refresh',
   '7 * * * *',
   $$SELECT etl.refresh_group('hourly');$$,
-  'warehouse',
+  :'WAREHOUSE_DB',
   'warehouse_etl'
 );
 
@@ -16,7 +21,7 @@ SELECT cron.schedule_in_database(
   'care-fdw-daily-refresh',
   '0 2 * * *',
   $$SELECT etl.refresh_group('daily');$$,
-  'warehouse',
+  :'WAREHOUSE_DB',
   'warehouse_etl'
 );
 

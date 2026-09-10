@@ -1,6 +1,31 @@
 # Operations Runbook
 
-## Manual Refresh
+Use this guide for routine refreshes, monitoring, and load control. For failed
+deployments, schema drift, or destructive rebuilds, use the
+[recovery runbook](recovery.md).
+
+Run the following commands on `metabase_warehouse` unless a section says
+otherwise.
+
+## How Refreshes Work
+
+The registry in `etl.replication_tables` selects one of two modes:
+
+| Mode | Behavior |
+|---|---|
+| `full` | Truncates the local `raw.*` table and reloads it from `replica.*` |
+| `incremental` | Reads rows changed since the last `modified_date` watermark minus the configured lookback, then upserts by `id` |
+
+If an incremental table has no `modified_date` column,
+`etl.incremental_refresh_table()` delegates to a full refresh. The lookback
+protects against source-replica lag by rereading a bounded period; increase it
+when observed lag exceeds the configured interval.
+
+`include_deleted = true` preserves soft-deleted rows in `raw.*`. The current
+registry uses this setting so reporting models can decide whether to filter
+`deleted = false`.
+
+## Refresh Data
 
 Refresh one table:
 
@@ -8,14 +33,26 @@ Refresh one table:
 SELECT etl.refresh_table('facility_facility');
 ```
 
-Refresh a group:
+Refresh scheduled groups:
 
 ```sql
 SELECT etl.refresh_group('hourly');
 SELECT etl.refresh_group('daily');
 ```
 
-Check status:
+Run initial loads off-peak. Start with daily dimensions, then smaller facts,
+then high-volume facts:
+
+```sql
+SELECT etl.refresh_group('daily');
+SELECT etl.refresh_table('emr_patient');
+SELECT etl.refresh_table('emr_encounter');
+SELECT etl.refresh_table('emr_observation');
+```
+
+## Check Health
+
+Current table status:
 
 ```sql
 SELECT *
@@ -23,156 +60,18 @@ FROM etl.replication_status
 ORDER BY refresh_group, priority, table_name;
 ```
 
-Check recent failures:
+Recent failures:
 
 ```sql
-SELECT *
+SELECT table_name, started_at, finished_at, error_message
 FROM etl.replication_runs
 WHERE status = 'failed'
 ORDER BY started_at DESC
 LIMIT 50;
 ```
 
-## Initial Load
-
-Run initial loads off-peak. Start with dimensions, then smaller facts, then high
-volume facts like `emr_observation`.
-
-```sql
-SELECT etl.refresh_group('daily');
-SELECT etl.refresh_table('facility_facility');
-SELECT etl.refresh_table('emr_patient');
-SELECT etl.refresh_table('emr_encounter');
-SELECT etl.refresh_table('emr_observation');
-```
-
-## Load Control
-
-Keep FDW impact on the read replica controlled:
-
-```sql
-ALTER ROLE warehouse_fdw_reader CONNECTION LIMIT 2;
-ALTER ROLE warehouse_fdw_reader SET statement_timeout = '5min';
-```
-
-Increase each table's lookback if replica lag is higher than expected:
-
-```sql
-UPDATE etl.replication_tables
-SET lookback = interval '6 hours'
-WHERE table_name = 'emr_observation';
-```
-
-Disable a noisy table while investigating:
-
-```sql
-UPDATE etl.replication_tables
-SET enabled = false
-WHERE table_name = 'emr_observation';
-```
-
-## FDW Role Mapping Issues
-
-FDW connections are resolved per local database role. If an admin user can run
-`etl.refresh_*()` but `warehouse_etl` or cron cannot, check the `warehouse_etl`
-foreign server grant and user mapping.
-
-Run on the warehouse database:
-
-```sql
-GRANT USAGE ON FOREIGN SERVER care_read_replica TO warehouse_etl;
-GRANT USAGE ON SCHEMA replica, raw, etl TO warehouse_etl;
-GRANT SELECT ON ALL TABLES IN SCHEMA replica TO warehouse_etl;
-GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA raw TO warehouse_etl;
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA etl TO warehouse_etl;
-
-DROP USER MAPPING IF EXISTS FOR warehouse_etl SERVER care_read_replica;
-
-CREATE USER MAPPING FOR warehouse_etl
-SERVER care_read_replica
-OPTIONS (
-  user 'warehouse_fdw_reader',
-  password 'CHANGE_ME_SOURCE_READER_PASSWORD'
-);
-```
-
-Test as `warehouse_etl`:
-
-```sql
-SET ROLE warehouse_etl;
-
-SELECT id
-FROM replica.facility_facility
-LIMIT 1;
-
-SELECT etl.refresh_table('facility_facility');
-
-RESET ROLE;
-```
-
-## Metabase
-
-Metabase should connect with `metabase_reader` and query only:
-
-```text
-raw.*
-mart.*
-etl.replication_status
-```
-
-Do not grant Metabase access to `replica.*`. Those tables are live FDW reads
-against the source read replica.
-
-## Schema Drift
-
-The raw table is created from the FDW table on first refresh. If a source model
-adds/removes columns later:
-
-1. Pause schedules.
-2. Re-import foreign tables with `sql/02-import-care-foreign-tables.sql`.
-3. For affected raw tables, either apply compatible `ALTER TABLE raw...` changes
-   or recreate the raw table.
-4. Run a manual refresh.
-5. Resume schedules.
-
-For a full rebuild of one table:
-
-```sql
-DROP TABLE IF EXISTS raw.emr_patient;
-DELETE FROM etl.replication_state WHERE table_name = 'emr_patient';
-SELECT etl.refresh_table('emr_patient');
-```
-
-## Clean Rebuild
-
-During initial setup, if several raw tables were created with the wrong owner or
-grants, rebuild the raw layer instead of repairing each table one by one.
-
-Run this from the warehouse database after pausing cron jobs:
-
-```sql
-DROP SCHEMA IF EXISTS raw CASCADE;
-CREATE SCHEMA raw;
-
-GRANT USAGE, CREATE ON SCHEMA raw TO warehouse_etl;
-GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA raw TO warehouse_etl;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA raw TO warehouse_etl;
-
-TRUNCATE etl.replication_state;
-TRUNCATE etl.replication_runs RESTART IDENTITY;
-```
-
-Then run the setup functions file again and trigger a staged initial sync:
-
-```sql
-SELECT etl.refresh_table('facility_facility');
-SELECT etl.refresh_group('daily');
-SELECT etl.refresh_group('hourly');
-```
-
-## Cron Monitoring
-
-Run from the database where `pg_cron` is installed:
+Cron schedules and recent runs must be queried from the warehouse `postgres`
+database:
 
 ```sql
 SELECT jobid, jobname, schedule, database, username, active
@@ -185,10 +84,129 @@ ORDER BY start_time DESC
 LIMIT 50;
 ```
 
-## Suggested Mart Pattern
+Run cron-management commands as the value of
+`infra.outputs.metabase_database_user` from `gcp_template`. PR #28 embeds that
+user in `POSTGRES_URL`, and `sql/05` uses that connection to schedule jobs that
+execute as `warehouse_etl`. Use the same connection because pg_cron restricts
+job visibility and modification by role.
 
-Keep raw tables close to source shape. Put analytics-friendly joins and filters
-in `mart.*`.
+## Pause and Resume Schedules
+
+Pause the ETL schedules before changing `replica.*`, rebuilding data, or
+applying a Metabase Helm release:
+
+```sql
+SELECT current_user;
+
+SELECT jobid, jobname, username, active
+FROM cron.job
+WHERE jobname IN (
+  'care-fdw-hourly-refresh',
+  'care-fdw-daily-refresh'
+)
+ORDER BY jobname;
+
+SELECT to_regprocedure(
+  'cron.alter_job(bigint,text,text,text,text,boolean)'
+) AS alter_job_function;
+
+SELECT cron.alter_job(jobid, active := false)
+FROM cron.job
+WHERE jobname IN (
+  'care-fdw-hourly-refresh',
+  'care-fdw-daily-refresh'
+);
+
+SELECT jobname, username, active
+FROM cron.job
+WHERE jobname IN (
+  'care-fdw-hourly-refresh',
+  'care-fdw-daily-refresh'
+)
+ORDER BY jobname;
+```
+
+`current_user` must equal `infra.outputs.metabase_database_user`. On an
+existing deployment, the inventory query must list both jobs with
+`username = 'warehouse_etl'`; an empty result under another login does not
+prove that no jobs exist. On a first deployment, neither job exists and there
+is nothing to pause.
+
+The function check must return the `cron.alter_job` signature. Stop if it
+returns `NULL`; this runbook does not assume an unverified pg_cron function
+version. Both existing jobs must then show `active = false`. Resume them after
+validation:
+
+```sql
+SELECT cron.alter_job(jobid, active := true)
+FROM cron.job
+WHERE jobname IN (
+  'care-fdw-hourly-refresh',
+  'care-fdw-daily-refresh'
+);
+
+SELECT jobname, username, active
+FROM cron.job
+WHERE jobname IN (
+  'care-fdw-hourly-refresh',
+  'care-fdw-daily-refresh'
+)
+ORDER BY jobname;
+```
+
+Both jobs must show `active = true`. The monthly history-cleanup job does not
+query warehouse schemas and does not need to be paused for schema maintenance.
+
+## Control Source Load
+
+The source reader is deliberately constrained:
+
+```sql
+ALTER ROLE warehouse_fdw_reader CONNECTION LIMIT 2;
+ALTER ROLE warehouse_fdw_reader SET statement_timeout = '5min';
+```
+
+If replica lag exceeds a table's lookback window:
+
+```sql
+UPDATE etl.replication_tables
+SET lookback = interval '6 hours'
+WHERE table_name = 'emr_observation';
+```
+
+Temporarily disable a noisy table:
+
+```sql
+UPDATE etl.replication_tables
+SET enabled = false
+WHERE table_name = 'emr_observation';
+```
+
+Re-enable it after investigation:
+
+```sql
+UPDATE etl.replication_tables
+SET enabled = true
+WHERE table_name = 'emr_observation';
+```
+
+## Metabase Access
+
+Metabase connects as `metabase_reader` and may query:
+
+```text
+raw.*
+mart.*
+etl.replication_status
+```
+
+Never grant Metabase access to `replica.*`; those queries execute against the
+source read replica.
+
+## Add Reporting Models
+
+Keep `raw.*` close to the source shape. Put analytics-friendly joins, names,
+and filters in `mart.*`:
 
 ```sql
 CREATE OR REPLACE VIEW mart.active_facilities AS
@@ -203,3 +221,6 @@ SELECT
 FROM raw.facility_facility
 WHERE deleted = false;
 ```
+
+Grant `metabase_reader` access to new mart objects if the applicable default
+privileges were not created by `sql/06-metabase-reader.sql`.

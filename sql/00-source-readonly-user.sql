@@ -1,13 +1,20 @@
--- Run on the source primary only if this role does not already exist.
--- PostgreSQL roles and grants replicate to Cloud SQL read replicas.
--- Replace care with your source database name if different.
+-- Runs on the CARE source primary DB (not the warehouse).
+-- Creates the read-only FDW reader role used by postgres_fdw on the warehouse.
+-- Idempotent — safe to re-run; ALTER ROLE syncs the password on reruns.
 
-CREATE ROLE warehouse_fdw_reader
-  LOGIN
-  PASSWORD 'CHANGE_ME_STRONG_PASSWORD'
-  CONNECTION LIMIT 2;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'warehouse_fdw_reader') THEN
+    CREATE ROLE warehouse_fdw_reader
+      LOGIN
+      CONNECTION LIMIT 2;
+  END IF;
+END;
+$$;
 
-GRANT CONNECT ON DATABASE care TO warehouse_fdw_reader;
+ALTER ROLE warehouse_fdw_reader PASSWORD :'FDW_READER_PASSWORD';
+
+GRANT CONNECT ON DATABASE :SOURCE_DBNAME TO warehouse_fdw_reader;
 GRANT USAGE ON SCHEMA public TO warehouse_fdw_reader;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO warehouse_fdw_reader;
 

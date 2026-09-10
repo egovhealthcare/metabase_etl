@@ -1,111 +1,63 @@
-# Postgres FDW Replication Setup
+# CARE Reporting Warehouse
 
-This directory documents a Postgres-native reporting warehouse pattern:
+Postgres-native replication for Metabase:
 
 ```text
-source Cloud SQL read replica -> postgres_fdw -> warehouse Postgres raw tables -> Metabase
+CARE Cloud SQL read replica
+  -> postgres_fdw
+  -> replica.* foreign tables
+  -> raw.* local snapshots
+  -> mart.* reporting models
+  -> Metabase
 ```
 
-The goal is to keep the operating surface to Postgres SQL and Metabase. BigQuery,
-Looker Studio, dbt, Airflow, and application code are not required for the base
-pipeline.
+The warehouse uses PostgreSQL SQL only. It does not require dbt, Airflow, or
+application code.
+
+## Start Here
+
+| Goal | Guide |
+|---|---|
+| Browse all documentation | [Documentation index](docs/README.md) |
+| Configure the OpenTofu integration | [OpenTofu deployment](docs/opentofu-deployment.md) |
+| Understand deployment inputs | [Variable reference](docs/variables.md) |
+| Deploy manually in Cloud SQL Studio | [Cloud SQL Studio setup](docs/cloud-sql-studio-setup.md) |
+| Operate the warehouse | [Operations runbook](docs/operations.md) |
+| Recover from failures or schema drift | [Recovery runbook](docs/recovery.md) |
+| Review replicated tables | [Table catalog](docs/table-catalog.md) |
+
+The OpenTofu integration is being added in
+[`egovhealthcare/gcp_template#28`](https://github.com/egovhealthcare/gcp_template/pull/28).
+Cloud SQL Studio remains the manual path until that change is merged and
+deployed.
 
 ## Repository Layout
 
 ```text
-sql/00-source-readonly-user.sql      Optional source role setup
-sql/01-warehouse-fdw-setup.sql       Warehouse schemas, roles, FDW server
+sql/00-source-readonly-user.sql      Source read-only FDW role
+sql/01-warehouse-fdw-setup.sql       Warehouse schemas, roles, and FDW server
 sql/02-import-care-foreign-tables.sql
-sql/03-etl-functions.sql             Generic refresh functions
+sql/03-etl-functions.sql             Refresh functions and state
 sql/04-register-care-tables.sql      CARE table registry
-sql/05-pg-cron-schedules.sql         Scheduling examples
+sql/05-pg-cron-schedules.sql         Refresh schedules
 sql/06-metabase-reader.sql           Read-only Metabase role
-docs/table-catalog.md                Tables included from model files
-docs/operations.md                   Runbook and troubleshooting
+docs/                                Deployment, operations, and catalog guides
 ```
 
-## Execution Order
+The numbered SQL files are the source of truth and must run in order. The
+OpenTofu-managed Helm Job clones this repository and passes Kubernetes Secret
+values to the existing `psql` variables. It does not render or rewrite SQL.
 
-1. Run `sql/00-source-readonly-user.sql` only if the source read-only role does
-   not already exist. On Cloud SQL, run this on the source primary once; the role
-   and grants replicate to the read replica.
-2. Run `sql/01-warehouse-fdw-setup.sql` on the warehouse database as a user that
-   can create extensions and foreign servers.
-3. Run `sql/02-import-care-foreign-tables.sql` on the warehouse database.
-4. Run `sql/03-etl-functions.sql` on the warehouse database.
-5. Run `sql/04-register-care-tables.sql` on the warehouse database.
-6. Run manual refreshes from the warehouse database.
-7. Enable `pg_cron` on the warehouse instance, then run
-   `sql/05-pg-cron-schedules.sql` from the database where `pg_cron` is installed,
-   usually `postgres`.
-8. Run `sql/06-metabase-reader.sql` on the warehouse database, then connect
-   Metabase with that role.
+## Safety Boundary
 
-## Cloud SQL Notes
+The warehouse has four schemas:
 
-Enable `pg_cron` on the warehouse Cloud SQL instance before creating schedules:
+| Schema | Purpose | Metabase access |
+|---|---|---|
+| `replica` | Live foreign tables backed by the source read replica | Never |
+| `raw` | Local snapshot tables | Read |
+| `mart` | Reporting views and materialized views | Read |
+| `etl` | Registry, state, logs, and refresh functions | Status view only |
 
-Navigate to the GCP Cloud SQL Console, Edit your CloudSQL Instance and Add a new flag
-
-`cloudsql.enable_pg_cron=on`
-
----
-
-`postgres_fdw` is installed with SQL and does not require the `pg_cron` flag:
-
-```sql
-CREATE EXTENSION IF NOT EXISTS postgres_fdw;
-```
-
-For Cloud SQL private IP, the warehouse instance and the source read replica
-must be reachable over the same VPC/private networking path. The FDW server must
-point to the read replica host or private IP, not the primary.
-
-## Schema Contract
-
-The warehouse uses three main schemas:
-
-```text
-replica  Foreign tables that point to the read replica.
-raw      Local copied tables. Metabase should read these.
-mart     Reporting views/materialized views for Metabase.
-etl      Refresh registry, state, logs, and functions.
-```
-
-Do not expose `replica.*` to dashboard users. `replica.*` is live remote access
-to the read replica. Metabase should use `raw.*` and `mart.*`.
-
-## First Smoke Test
-
-After importing foreign tables:
-
-```sql
-SELECT id, external_id, name, modified_date
-FROM replica.facility_facility
-LIMIT 10;
-```
-
-Then create and load the local raw copy:
-
-```sql
-SELECT etl.refresh_table('facility_facility');
-
-SELECT id, external_id, name, modified_date
-FROM raw.facility_facility
-LIMIT 10;
-```
-
-## Refresh Strategy
-
-The table registry uses two modes:
-
-```text
-full         Truncate and reload. Good for small dimension/config tables.
-incremental Upsert rows changed since modified_date watermark minus lookback.
-```
-
-Most CARE models inherit `modified_date`, so incremental refresh can use a
-watermark safely. Keep the lookback window larger than expected replica lag.
-
-For analytics, prefer keeping soft-deleted rows in `raw.*` and filtering
-`deleted = false` in `mart.*` views. This preserves delete events and auditability.
+Do not grant Metabase access to `replica.*`. Queries against that schema run on
+the source read replica.
